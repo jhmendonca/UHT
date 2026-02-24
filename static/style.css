@@ -1,0 +1,366 @@
+/* ===== CORES ===== */
+:root {
+    --wine: #4b0018;
+    --dark-wine: #2b0010;
+    --gold: #ba850f;
+    --gray: #d8d8d8;
+    --btn-red: #92002e;
+}
+
+/* ===== RESET ===== */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: "Segoe UI", Arial, sans-serif;
+}
+
+/* ========================= LOGIN PAGE ========================= */
+
+.login-body {
+    background: var(--dark-wine);
+    height: 100vh;
+    overflow: hidden;
+}
+
+.login-container {
+    display: flex;
+    height: 100vh;
+}
+
+/* Lado esquerdo com banner */
+.login-left {
+    flex: 1;
+    background-color: #4b0018;
+    background-image: url("/static/img/banner.png");
+    background-repeat: no-repeat;
+    background-size: auto 100%;
+    background-position: -120px 0px;
+}
+
+/* Lado direito */
+.login-right {
+    flex: 1;
+    background: #dcdcdc;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Box central */
+.login-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 380px;
+}
+
+/* Avatar / Ícone */
+.login-avatar {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-bottom: 25px;
+}
+
+.avatar-circle {
+    width: 70px;
+    height: 70px;
+    border-radius: 50%;
+    background: #d1d1d1;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.avatar-icon {
+    font-size: 30px;
+    color: #820025;
+}
+
+.avatar-text {
+    margin-top: 8px;
+    font-weight: 600;
+    color: #333;
+}
+
+/* Mensagem de erro */
+.login-error {
+    color: #b00020;
+    margin-bottom: 12px;
+    font-size: 14px;
+}
+
+/* Form em coluna */
+.login-form-column {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    gap: 14px;
+}
+
+/* Inputs */
+.input-field-column {
+    width: 100%;
+    height: 40px;
+    padding: 0 16px;
+    border-radius: 20px;
+    border: none;
+    background: white;
+    font-size: 14px;
+    outline: none;
+}
+
+.input-field-column::placeholder {
+    color: #b0b0b0;
+}
+
+/* Botão Entrar */
+.btn-main-column {
+    margin-top: 10px;
+    width: 120px;
+    align-self: center;
+    height: 36px;
+    border: none;
+    border-radius: 20px;
+    background: var(--btn-red);
+    color: white;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.btn-main-column:hover {
+    opacity: 0.85;
+}
+
+/* ========================= DASHBOARD PAGE ========================= */
+
+.dash-body {
+    background: var(--dark-wine);
+    height: 100vh;
+}
+
+.dash-wrapper {
+    display: flex;
+    height: 100vh;
+    width: 100%;
+}
+
+/* LATERAL ESQUERDA */
+.dash-sidebar {
+    width: 120px;
+    background: var(--dark-wine);
+    display: flex;
+    justify-content: center;
+    align-items: stretch;
+}
+
+.stripes {
+    height: 1050px;
+    width: 90px;                      /* largura total da faixa vertical */
+    display: flex;
+    flex-direction: row;              /* lado a lado = barras verticais */
+}
+
+.s1, .s2, .s3 {
+    flex: 1;
+}
+
+.s1 { background: var(--wine); }
+.s2 { background: var(--gold); }
+.s3 { background: var(--wine); }
+
+/* ÁREA PRINCIPAL */
+.dash-main {
+    flex: 1;
+    background: var(--gray);
+    position: relative;
+    border-right: 12px solid var(--wine);  /* faixa vinho à direita */
+}
+
+/* FAIXA SUPERIOR VINHO */
+.top-bar {
+    height: 12px;
+    background: var(--wine);
+    width: 100%;
+}
+
+/* LINHA SUPERIOR */
+.top-row {
+    display: flex;
+    justify-content: flex-start;  /* junta tudo à esquerda */
+    gap: 25px;                    /* controla a distância entre câmera e botões */
+    margin: 20px;
+}
+
+/* CAIXA DA CÂMERA */
+.camera-box {
+    background: var(--gray);
+    border: 8px solid var(--wine);
+    width: 640px;
+    height: 640px;
+    overflow: hidden;
+}
+
+.camera-video {
+     width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+/* CONTROLES */
+.controls-panel {
+    width: 23%;
+    padding: 20px;
+    border-radius: 8px;
+}
+
+.status-row {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
+    margin-bottom: 12px;
+}
+
+.status-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: 2px solid #00ff7f;
+}
+.status-dot.on { background: #00ff7f; }
+
+.status-text {
+    font-size: 14px;
+}
+
+/* Botões painel / limpar */
+.btn-green,
+.btn-red,
+.btn-gold,
+.btn-gray {
+    display: block;
+    width: 100%;
+    padding: 10px 0;
+    margin-bottom: 12px;
+    border-radius: 20px;
+    border: none;
+    color: white;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.btn-green { background: #008f28; }
+.btn-red   { background: #940030; }
+.btn-gold  { background: var(--gold); }
+.btn-gray  { background: #555; width: auto; padding: 10px 30px; }
+
+.btn-green:hover,
+.btn-red:hover,
+.btn-gold:hover,
+.btn-gray:hover {
+    opacity: 0.9;
+}
+
+.stats-box {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid #ddd;
+    font-size: 14px;
+}
+
+/* FAIXA ENTRE CÂMERA E TERMINAL */
+.middle-bar {
+    width: 100%;
+    height: 12px;
+    background: var(--wine);
+    margin-top: 5px;
+}
+
+/* TERMINAL */
+.bottom-row {
+    display: flex;
+    justify-content: flex-start;
+    margin: 50px 20px 20px 20px;   /* empurra para baixo */
+    gap: 15px;                    /* distância entre terminal e botão */
+}
+
+.log-box {
+    border: 8px solid var(--wine);
+    background: var(--gray);
+    width: 70%;
+    height: 300px;
+    overflow-y: auto;
+}
+
+.log-actions {
+    width: auto;
+    margin-top: -150px;
+    margin-left: 15px;     /* distância perfeita entre terminal e botão */
+    display: flex;
+    align-items: center;
+}
+
+/* ========================= MODAL DATAS ========================= */
+
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.4);
+    display: none;
+    align-items: center;
+    justify-content: center;
+}
+
+.modal-overlay.show {
+    display: flex;
+}
+
+.modal {
+    width: 70%;
+    max-width: 800px;
+    background: #dedede;
+    border-top: 10px solid var(--wine);
+    padding: 30px 40px 40px;
+}
+
+.modal h1 {
+    text-align: center;
+    margin-bottom: 25px;
+    font-size: 36px;
+}
+
+.modal-form {
+    background: #e9e9e9;
+    padding: 20px 30px 30px;
+}
+
+.modal-row {
+    display: flex;
+    gap: 40px;
+    margin-bottom: 20px;
+}
+
+.modal-field {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.modal-field label {
+    font-size: 15px;
+}
+
+.modal-field input {
+    padding: 8px 10px;
+    border-radius: 4px;
+    border: 1px solid #ccc;
+}
+
+.modal-actions {
+    display: flex;
+    justify-content: center;
+    margin-top: 10px;
+}
