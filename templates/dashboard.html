@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Painel UHT - AB Mauri</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <style>
+    /* Estilos adicionais para melhorar a interface */
+    .log-line {
+      padding: 8px 12px;
+      margin: 4px 0;
+      border-left: 3px solid #00a8ff;
+      background: rgba(0, 168, 255, 0.05);
+      border-radius: 0 4px 4px 0;
+      font-family: 'Consolas', 'Monaco', monospace;
+      font-size: 0.9em;
+      word-break: break-word;
+      line-height: 1.4;
+      animation: fadeIn 0.3s ease;
+    }
+
+    .log-time {
+      color: #7f8fa6;
+      font-size: 0.8em;
+      margin-right: 8px;
+      font-family: monospace;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-5px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none !important;
+    }
+
+    #camera-img {
+      background: #000;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+
+    .camera-box {
+      position: relative;
+    }
+
+    .camera-box::before {
+      content: "Câmera UHT";
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 0.9em;
+      z-index: 1;
+    }
+  </style>
+</head>
+<body class="dash-body">
+
+<div class="dash-wrapper">
+
+  <div class="dash-sidebar">
+    <div class="stripes">
+      <div class="s1"></div>
+      <div class="s2"></div>
+      <div class="s3"></div>
+    </div>
+  </div>
+
+  <div class="dash-main">
+    <div class="top-bar"></div>
+
+    <div class="top-row">
+      <div class="camera-box">
+        <img
+          id="camera-img"
+          class="camera-video"
+          data-src="{{ url_for('video_feed') }}"
+          src=""
+          alt="Câmera UHT">
+      </div>
+
+      <div class="controls-panel">
+        <div class="status-row">
+          <span class="status-dot" id="status-dot"></span>
+          <span class="status-text" id="status-text">PARADO</span>
+        </div>
+
+        <button class="btn-green" id="btn-start">INICIAR</button>
+        <button class="btn-red" id="btn-stop" disabled>PARAR</button>
+        <button class="btn-gold" id="btn-dates">ALTERAR DATAÇÃO</button>
+
+        <div class="stats-box">
+          <div class="stat-line">
+            <span class="stat-label">Total (OCR):</span>
+            <span class="stat-value" id="stat-ok">0</span>
+          </div>
+          <div class="stat-line">
+            <span class="stat-label">Erros (totais):</span>
+            <span class="stat-value" id="stat-err">0</span>
+          </div>
+          <div class="last-event">
+            <div class="last-title">Último evento</div>
+            <div class="last-value" id="last-event">—</div>
+          </div>
+          <div class="last-event" style="margin-top:10px;">
+            <div class="last-title">Último OCR</div>
+            <div class="last-value" id="last-ocr">—</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="middle-bar"></div>
+
+    <div class="bottom-row">
+      <div class="log-box" id="log-box">
+        <p class="log-placeholder">Logs do sistema aparecerão aqui...</p>
+      </div>
+      <div class="log-actions">
+        <button class="btn-gray" id="btn-clear">LIMPAR LOGS</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+      <h1 style="margin:0;">ALTERAR DATAÇÃO</h1>
+      <button class="btn-gray" id="btn-modal-close" style="padding:6px 10px;">✕</button>
+    </div>
+
+    <div class="modal-form">
+      <div class="modal-row">
+        <div class="modal-field">
+          <label>Data fabricação</label>
+          <input type="date" id="data_fabricacao" readonly>
+        </div>
+
+        <div class="modal-field">
+          <label>Lote</label>
+          <input type="text" id="lote" readonly>
+        </div>
+      </div>
+
+      <div class="modal-row">
+        <div class="modal-field">
+          <label>Data validade *</label>
+          <input type="date" id="data_validade" required>
+          <small style="color:#7f8fa6; font-size:0.9em;">Data obrigatória</small>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn-main-column" id="btn-modal-ok">SALVAR</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  // ============================================
+  // ELEMENTOS DO DOM
+  // ============================================
+  const cameraImg = document.getElementById("camera-img");
+  const startBtn = document.getElementById("btn-start");
+  const stopBtn = document.getElementById("btn-stop");
+  const dateBtn = document.getElementById("btn-dates");
+  const clearBtn = document.getElementById("btn-clear");
+
+  const statusDot = document.getElementById("status-dot");
+  const statusText = document.getElementById("status-text");
+
+  const logBox = document.getElementById("log-box");
+  const streamUrl = cameraImg.dataset.src;
+
+  const statOk = document.getElementById("stat-ok");
+  const statErr = document.getElementById("stat-err");
+  const lastEventEl = document.getElementById("last-event");
+  const lastOcrEl = document.getElementById("last-ocr");
+
+  // Modal
+  const modalOverlay = document.getElementById("modal-overlay");
+  const modalClose = document.getElementById("btn-modal-close");
+  const modalOk = document.getElementById("btn-modal-ok");
+  const fabInput = document.getElementById("data_fabricacao");
+  const valInput = document.getElementById("data_validade");
+  const loteInput = document.getElementById("lote");
+
+  // ============================================
+  // ESTADO DA APLICAÇÃO
+  // ============================================
+  let isRunning = false;
+  let isVideoLoaded = false;
+  let logEventSource = null;
+  let statsEventSource = null;
+  let reconnectAttempts = 0;
+  const MAX_RECONNECT_ATTEMPTS = 10;
+
+  // ============================================
+  // FUNÇÕES UTILITÁRIAS
+  // ============================================
+
+  /**
+   * Converte ddmmyy (ex: 220126) -> ISO (YYYY-MM-DD) para <input type="date">
+   */
+  function ddmmyyToIso(ddmmyy) {
+    const s = String(ddmmyy || "").trim();
+    if (!/^\d{6}$/.test(s)) return "";
+    const dd = s.slice(0, 2);
+    const mm = s.slice(2, 4);
+    const yy = s.slice(4, 6);
+    return `20${yy}-${mm}-${dd}`; // assume 20xx
+  }
+
+  /**
+   * Converte ISO (YYYY-MM-DD) -> ddmmyy (ex: 220126) para o backend/OCR
+   */
+  function isoToDdmmyy(iso) {
+    const s = String(iso || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return "";
+    const mm = s.slice(5, 7);
+    const dd = s.slice(8, 10);
+    const yy = s.slice(2, 4);
+    return `${dd}${mm}${yy}`;
+  }
+
+  /**
+   * Adiciona uma linha de log à interface
+   */
+  function appendLog(message) {
+    if (!message || !String(message).trim()) return;
+
+    // Remove placeholder se existir
+    const placeholder = logBox.querySelector(".log-placeholder");
+    if (placeholder) placeholder.remove();
+
+    const logLine = document.createElement("div");
+    logLine.className = "log-line";
+
+    // Adiciona timestamp
+    const now = new Date();
+    const timestamp = now.toLocaleTimeString("pt-BR", {
+      hour12: false,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit"
+    });
+
+    const timeSpan = document.createElement("span");
+    timeSpan.className = "log-time";
+    timeSpan.textContent = `[${timestamp}]`;
+
+    const messageSpan = document.createElement("span");
+    messageSpan.textContent = ` ${message}`;
+
+    logLine.appendChild(timeSpan);
+    logLine.appendChild(messageSpan);
+    logBox.appendChild(logLine);
+
+    // Scroll automático para o final
+    logBox.scrollTop = logBox.scrollHeight;
+
+    // Log no console também para debug
+    console.log(`[LOG] ${message}`);
+  }
+
+  /**
+   * Limpa todos os logs da interface
+   */
+  function clearLogs() {
+    logBox.innerHTML = '<p class="log-placeholder">Logs do sistema aparecerão aqui...</p>';
+    appendLog("✅ Logs limpos");
+  }
+
+  /**
+   * Atualiza o estado visual do sistema (rodando/parado)
+   */
+  function setRunning(state) {
+    isRunning = state;
+
+    if (state) {
+      // Sistema RODANDO
+      statusDot.classList.add("on");
+      statusText.textContent = "RODANDO";
+      statusText.style.color = "#4cd137";
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+
+      // Inicia o vídeo
+      if (!isVideoLoaded) {
+        cameraImg.src = streamUrl + "?_=" + Date.now();
+        isVideoLoaded = true;
+        cameraImg.onload = () => {
+          appendLog("✅ Vídeo carregado");
+        };
+        cameraImg.onerror = () => {
+          appendLog("⚠️ Falha ao carregar vídeo");
+        };
+      }
+    } else {
+      // Sistema PARADO
+      statusDot.classList.remove("on");
+      statusText.textContent = "PARADO";
+      statusText.style.color = "#ff3838";
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+
+      // Para o vídeo
+      cameraImg.src = "";
+      isVideoLoaded = false;
+    }
+  }
+
+  /**
+   * Mostra uma mensagem de erro
+   */
+  function showError(message) {
+    console.error("❌", message);
+    appendLog(`❌ ERRO: ${message}`);
+  }
+
+  /**
+   * Mostra uma mensagem de sucesso
+   */
+  function showSuccess(message) {
+    console.log("✅", message);
+    appendLog(`✅ ${message}`);
+  }
+
+  /**
+   * Mostra uma mensagem informativa
+   */
+  function showInfo(message) {
+    console.log("ℹ️", message);
+    appendLog(`ℹ️ ${message}`);
+  }
+
+  // ============================================
+  // CONEXÕES SSE (Server-Sent Events)
+  // ============================================
+
+  /**
+   * Conecta ao fluxo de logs do servidor
+   */
+  function connectLogs() {
+    if (logEventSource) {
+      logEventSource.close();
+    }
+
+    try {
+      logEventSource = new EventSource("/logs");
+
+      logEventSource.onopen = () => {
+        console.log("✅ Conectado aos logs SSE");
+        reconnectAttempts = 0;
+      };
+
+      logEventSource.onmessage = (event) => {
+        const data = event.data;
+
+        // Ignora mensagens de keepalive
+        if (data && data.trim() && !data.startsWith(": ")) {
+          appendLog(data);
+        }
+      };
+
+      logEventSource.onerror = (error) => {
+        console.warn("⚠️ Erro na conexão de logs SSE", error);
+
+        // Fecha a conexão
+        if (logEventSource) {
+          logEventSource.close();
+          logEventSource = null;
+        }
+
+        // Tenta reconectar após delay exponencial
+        if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+          reconnectAttempts++;
+          const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+          console.log(`🔄 Tentando reconectar logs em ${delay}ms...`);
+
+          setTimeout(() => {
+            if (!isRunning) return; // Se o sistema foi parado, não reconecta
+            connectLogs();
+          }, delay);
+        } else {
+          showError("Não foi possível reconectar aos logs");
+        }
+      };
+
+    } catch (error) {
+      showError(`Falha ao conectar aos logs: ${error.message}`);
+
+      // Tenta novamente após 5 segundos
+      setTimeout(() => {
+        if (!isRunning) return;
+        connectLogs();
+      }, 5000);
+    }
+  }
+
+  /**
+   * Conecta ao fluxo de estatísticas do servidor
+   */
+  function connectStats() {
+    if (statsEventSource) {
+      statsEventSource.close();
+    }
+
+    try {
+      statsEventSource = new EventSource("/stats_stream");
+
+      statsEventSource.onopen = () => {
+        console.log("✅ Conectado às estatísticas SSE");
+      };
+
+      statsEventSource.onmessage = (event) => {
+        try {
+          const data = event.data;
+
+          // Ignora mensagens de keepalive
+          if (!data || data.startsWith(": ")) return;
+
+          const stats = JSON.parse(data);
+
+          // Atualiza os valores na interface
+          if (stats.pass_count !== undefined) {
+            statOk.textContent = stats.pass_count;
+            statOk.style.color = stats.pass_count > 0 ? "#4cd137" : "#ffffff";
+          }
+
+          if (stats.error_count !== undefined) {
+            statErr.textContent = stats.error_count;
+            statErr.style.color = stats.error_count > 0 ? "#ff3838" : "#ffffff";
+          }
+
+          if (stats.last_event !== undefined) {
+            lastEventEl.textContent = stats.last_event || "—";
+          }
+
+          if (stats.last_ocr !== undefined) {
+            lastOcrEl.textContent = stats.last_ocr || "—";
+          }
+
+          // Verifica se há um run_id (sistema rodando)
+          if (stats.run_id && !isRunning) {
+            setRunning(true);
+          }
+
+        } catch (error) {
+          console.warn("⚠️ Erro ao processar estatísticas:", error);
+        }
+      };
+
+      statsEventSource.onerror = (error) => {
+        console.warn("⚠️ Erro na conexão de estatísticas SSE", error);
+
+        // Fecha a conexão
+        if (statsEventSource) {
+          statsEventSource.close();
+          statsEventSource = null;
+        }
+
+        // Tenta reconectar após 3 segundos
+        setTimeout(() => {
+          if (!isRunning) return;
+          connectStats();
+        }, 3000);
+      };
+
+    } catch (error) {
+      console.error("❌ Falha ao conectar às estatísticas:", error);
+
+      // Tenta novamente após 5 segundos
+      setTimeout(() => {
+        if (!isRunning) return;
+        connectStats();
+      }, 5000);
+    }
+  }
+
+  // ============================================
+  // CONTROLES DO SISTEMA
+  // ============================================
+
+  /**
+   * Inicia o sistema (OCR + vídeo)
+   */
+  async function startSystem() {
+    if (isRunning) {
+      showError("O sistema já está em execução");
+      return;
+    }
+
+    try {
+      showInfo("🔄 Iniciando sistema...");
+
+      const response = await fetch("/start_run", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        }
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (data.ok) {
+        setRunning(true);
+        showSuccess(`Sistema iniciado com ID: ${data.run_id}`);
+
+        // Reconecta SSE para garantir conexão
+        connectLogs();
+        connectStats();
+      } else {
+        showError(`Falha ao iniciar: ${data.error || "Erro desconhecido"}`);
+      }
+
+    } catch (error) {
+      showError(`Erro ao iniciar sistema: ${error.message}`);
+    }
+  }
+
+  /**
+   * Para o sistema (OCR + vídeo)
+   */
+  async function stopSystem() {
+    if (!isRunning) {
+      showError("O sistema já está parado");
+      return;
+    }
+
+    try {
+      showInfo("🛑 Parando sistema...");
+
+      const response = await fetch("/stop_stream", {
+        method: "POST"
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      setRunning(false);
+      showSuccess("Sistema parado com sucesso");
+
+    } catch (error) {
+      showError(`Erro ao parar sistema: ${error.message}`);
+    }
+  }
+
+  // ============================================
+  // MODAL DE DATAÇÃO
+  // ============================================
+
+  /**
+   * Abre o modal para editar as datas
+   */
+  async function openDateModal() {
+    try {
+      showInfo("📅 Carregando datas...");
+
+      const response = await fetch("/get_dates");
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      // Preenche os campos:
+      // backend devolve ddmmyy, mas o input type="date" exige ISO YYYY-MM-DD
+      fabInput.value = ddmmyyToIso(data.data_fabricacao);
+      valInput.value = ddmmyyToIso(data.data_validade);
+      loteInput.value = data.lote || "";
+
+      // Foca no campo de data de validade
+      setTimeout(() => valInput.focus(), 100);
+
+      // Mostra o modal
+      modalOverlay.classList.add("show");
+
+    } catch (error) {
+      showError(`Erro ao carregar datas: ${error.message}`);
+    }
+  }
+
+  /**
+   * Salva as datas alteradas
+   */
+  async function saveDates() {
+    // Validação básica
+    if (!valInput.value) {
+      alert("⚠️ Por favor, insira a data de validade!");
+      valInput.focus();
+      return;
+    }
+
+    try {
+      showInfo("💾 Salvando datas...");
+
+      const response = await fetch("/set_dates", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        // Envia somente validade, e no formato ddmmyy (compatível com OCR)
+        body: JSON.stringify({
+          data_validade: isoToDdmmyy(valInput.value)
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (data.ok) {
+        showSuccess("✅ Datação atualizada com sucesso");
+        closeModal();
+      } else {
+        showError(`❌ Erro ao salvar: ${data.error || "Erro desconhecido"}`);
+      }
+
+    } catch (error) {
+      showError(`❌ Erro ao salvar datas: ${error.message}`);
+    }
+  }
+
+  /**
+   * Fecha o modal
+   */
+  function closeModal() {
+    modalOverlay.classList.remove("show");
+  }
+
+  // ============================================
+  // INICIALIZAÇÃO
+  // ============================================
+
+  /**
+   * Inicializa a aplicação
+   */
+  function init() {
+    console.log("🚀 Inicializando Painel UHT...");
+
+    // Estado inicial
+    setRunning(false);
+
+    // Configura event listeners
+    startBtn.addEventListener("click", startSystem);
+    stopBtn.addEventListener("click", stopSystem);
+    dateBtn.addEventListener("click", openDateModal);
+    clearBtn.addEventListener("click", clearLogs);
+
+    // Modal events
+    modalClose.addEventListener("click", closeModal);
+    modalOk.addEventListener("click", saveDates);
+
+    // Fecha modal ao clicar fora ou pressionar ESC
+    modalOverlay.addEventListener("click", (event) => {
+      if (event.target === modalOverlay) {
+        closeModal();
+      }
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && modalOverlay.classList.contains("show")) {
+        closeModal();
+      }
+    });
+
+    // Envia formulário com Enter
+    valInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        saveDates();
+      }
+    });
+
+    // Conecta aos fluxos SSE
+    connectLogs();
+    connectStats();
+
+    // Log inicial
+    appendLog("✅ Painel UHT inicializado");
+    appendLog("🔗 Aguardando comandos...");
+
+    // Verifica saúde do servidor
+    checkServerHealth();
+
+    console.log("✅ Painel UHT pronto");
+  }
+
+  /**
+   * Verifica se o servidor está respondendo
+   */
+  async function checkServerHealth() {
+    try {
+      const response = await fetch("/health");
+      if (response.ok) {
+        appendLog("🌐 Conectado ao servidor Flask");
+      } else {
+        showError("⚠️ Servidor Flask com problemas");
+      }
+    } catch (error) {
+      showError("❌ Não foi possível conectar ao servidor");
+    }
+  }
+
+  // ============================================
+  // INICIALIZAÇÃO AUTOMÁTICA
+  // ============================================
+
+  // Inicia quando o DOM estiver carregado
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    // DOM já carregado
+    init();
+  }
+
+  // ============================================
+  // EXPOSIÇÃO PARA DEBUG (opcional)
+  // ============================================
+
+  // Expõe funções úteis no console para debug
+  window.dashboard = {
+    startSystem,
+    stopSystem,
+    setRunning,
+    appendLog,
+    clearLogs,
+    openDateModal,
+    saveDates,
+    showError,
+    showSuccess,
+    showInfo
+  };
+
+  console.log("🔧 Dashboard disponível como window.dashboard");
+
+})();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <title>YOLO na Página</title>
+    <style>
+        body {
+            background: #111;
+            color: #eee;
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            min-height: 100vh;
+            padding-top: 20px;
+        }
+        h1 {
+            margin-bottom: 20px;
+        }
+        .video-container {
+            border: 2px solid #444;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        img {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <h1>YOLO rodando na página (sem janela)</h1>
+    <div class="video-container">
+        <img src="{{ url_for('video_feed') }}" alt="YOLO video">
+    </div>
+</body>
+</html>
