@@ -106,6 +106,7 @@ ocr_stop = threading.Event()
 date1_consecutive_errors = 0
 date2_consecutive_errors = 0
 lote_consecutive_errors = 0
+image_fail_consecutive = 0
 
 date1_total_errors = 0
 date2_total_errors = 0
@@ -146,7 +147,7 @@ def push_log(msg: str):
 def reset_everything_for_new_run():
     global total_video, seen_ids
     global pass_count, error_count, last_event_text, last_ocr_text
-    global date1_consecutive_errors, date2_consecutive_errors, lote_consecutive_errors
+    global date1_consecutive_errors, date2_consecutive_errors, lote_consecutive_errors, image_fail_consecutive
     global date1_total_errors, date2_total_errors, lote_total_errors
 
     total_video = 0
@@ -160,6 +161,7 @@ def reset_everything_for_new_run():
     date1_consecutive_errors = 0
     date2_consecutive_errors = 0
     lote_consecutive_errors = 0
+    image_fail_consecutive = 0
 
     date1_total_errors = 0
     date2_total_errors = 0
@@ -409,7 +411,7 @@ def ocr_worker():
     e salva ROI OK/FAIL (inclui binário também no FAIL).
     """
     global pass_count, error_count, last_event_text, last_ocr_text
-    global date1_consecutive_errors, date2_consecutive_errors, lote_consecutive_errors
+    global date1_consecutive_errors, date2_consecutive_errors, lote_consecutive_errors, image_fail_consecutive
     global date1_total_errors, date2_total_errors, lote_total_errors
     auto_fab0, auto_lote0 = _calc_auto_fabricacao_lote()
     initial_val = (dates_state.get("data_validade") or "").strip() or "NÃO DEFINIDA"
@@ -486,6 +488,7 @@ def ocr_worker():
 
                 # ✅ mantém sua regra original: sucesso se pelo menos 1 bateu (image_fail < 3)
                 if image_fail < 3:
+                    image_fail_consecutive = 0
                     pass_count += 1
 
                     timestamp = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%Y%m%d_%H%M%S_%f")
@@ -513,25 +516,29 @@ def ocr_worker():
                     last_event_text = f"✅ SUCESSO - Imagem #{pass_count}"
 
                 else:
-                    error_count += 1
-                    push_log(f"❌ FALHA - Processando ROI: {image_filename}")
+                    image_fail_consecutive += 1
+                    push_log(f"⚠️ Caixa com falha total ({image_fail_consecutive}/3): {image_filename}")
 
-                    ts = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%Y%m%d_%H%M%S_%f")
-                    _save_fail_pair(ts, "roi_fail", roi_bgr, roi_processed)
+                    if image_fail_consecutive >= 3:
+                        error_count += 1
+                        push_log(f"❌ FALHA - 3 caixas consecutivas com erro: {image_filename}")
 
-                    push_log(f"   Texto reconhecido: {text}")
-                    push_log(f"   Sequência numérica extraída: {numeric_sequence}")
-                    push_log(f'   Data 1: {target_dates[0]} - {"ok" if date1_match else "X"}')
-                    push_log(f'   Data 2: {target_dates[1]} - {"ok" if date2_match else "X"}')
-                    push_log(f'   Lote: {target_code} - {"ok" if lote_match else "X"}')
-                    last_event_text = "❌ FALHA OCR"
+                        ts = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%Y%m%d_%H%M%S_%f")
+                        _save_fail_pair(ts, "roi_fail", roi_bgr, roi_processed)
+
+                        push_log(f"   Texto reconhecido: {text}")
+                        push_log(f"   Sequência numérica extraída: {numeric_sequence}")
+                        push_log(f'   Data 1: {target_dates[0]} - {"ok" if date1_match else "X"}')
+                        push_log(f'   Data 2: {target_dates[1]} - {"ok" if date2_match else "X"}')
+                        push_log(f'   Lote: {target_code} - {"ok" if lote_match else "X"}')
+                        last_event_text = "❌ FALHA OCR (3 consecutivas)"
+                        image_fail_consecutive = 0
+                    else:
+                        last_event_text = f"⚠️ Aguardando 3 falhas consecutivas ({image_fail_consecutive}/3)"
             else:
                 # OCR não achou texto
-                error_count += 1
-                push_log(f"❌ FALHA: Nenhum texto detectado - {image_filename}")
-
-                ts = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%Y%m%d_%H%M%S_%f")
-                _save_fail_pair(ts, "roi_notext", roi_bgr, roi_processed)
+                image_fail_consecutive += 1
+                push_log(f"⚠️ Caixa sem texto ({image_fail_consecutive}/3): {image_filename}")
 
                 date1_consecutive_errors += 1
                 date2_consecutive_errors += 1
@@ -539,17 +546,33 @@ def ocr_worker():
                 date1_total_errors += 1
                 date2_total_errors += 1
                 lote_total_errors += 1
-                last_event_text = "❌ FALHA: Nenhum texto"
+                if image_fail_consecutive >= 3:
+                    error_count += 1
+                    push_log(f"❌ FALHA: 3 caixas consecutivas sem texto - {image_filename}")
+
+                    ts = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%Y%m%d_%H%M%S_%f")
+                    _save_fail_pair(ts, "roi_notext", roi_bgr, roi_processed)
+                    last_event_text = "❌ FALHA: Nenhum texto (3 consecutivas)"
+                    image_fail_consecutive = 0
+                else:
+                    last_event_text = f"⚠️ Aguardando 3 falhas consecutivas ({image_fail_consecutive}/3)"
 
         except Exception as e:
-            error_count += 1
-            push_log(f"⚠️ Erro no worker OCR: {e}")
+            image_fail_consecutive += 1
+            push_log(f"⚠️ Erro no worker OCR ({image_fail_consecutive}/3): {e}")
 
-            try:
-                ts = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%Y%m%d_%H%M%S_%f")
-                _save_fail_pair(ts, "roi_exception", roi_bgr, roi_processed)
-            except:
-                pass
+            if image_fail_consecutive >= 3:
+                error_count += 1
+                push_log("❌ FALHA: 3 caixas consecutivas com exceção no OCR")
+                try:
+                    ts = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%Y%m%d_%H%M%S_%f")
+                    _save_fail_pair(ts, "roi_exception", roi_bgr, roi_processed)
+                except:
+                    pass
+                last_event_text = "❌ FALHA: Exceção OCR (3 consecutivas)"
+                image_fail_consecutive = 0
+            else:
+                last_event_text = f"⚠️ Aguardando 3 falhas consecutivas ({image_fail_consecutive}/3)"
 
         finally:
             try:
