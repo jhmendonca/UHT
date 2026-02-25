@@ -19,8 +19,10 @@ app.secret_key = os.environ.get("FLASK_SECRET_KEY", "troque-essa-chave-em-produc
 # ========= CONFIGURAÇÃO DO VÍDEO =========
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Se quiser usar arquivo, deixe RTSP_URL vazio ("")
-RTSP_URL = "rtsp://admin:admin123@172.16.41.20:554/cam/realmonitor?channel=1&subtype=0"
+# Fonte de vídeo:
+# - Defina RTSP_URL no ambiente para usar câmera RTSP
+# - Deixe vazio para usar arquivo local (videocamera.mp4 / output.mp4)
+RTSP_URL = (os.environ.get("RTSP_URL") or "").strip()
 
 if RTSP_URL.strip():
     VIDEO_SOURCE = RTSP_URL.strip()
@@ -236,10 +238,54 @@ def _upscale_preserve_details(img_bgr, scale: int):
     return sharp
 
 
+def _clean_binary_inverted(bin_inv):
+    """
+    Limpa ruído em imagem binária invertida (texto branco em fundo preto):
+    - remove pontos muito pequenos
+    - remove componentes grandes coladas na borda (moldura do rótulo)
+    """
+    if bin_inv is None or bin_inv.size == 0:
+        return bin_inv
+
+    h, w = bin_inv.shape[:2]
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(bin_inv, connectivity=8)
+    out = np.zeros_like(bin_inv)
+
+    min_area = max(12, int(h * w * 0.00025))
+    max_border_area = max(80, int(h * w * 0.10))
+
+    for i in range(1, num_labels):
+        x, y, cw, ch, area = stats[i]
+        if area < min_area:
+            continue
+
+        # Remove componentes muito alongados (linhas de moldura/cabeçalho)
+        # preservando dígitos/letras que tendem a ter razão de aspecto moderada.
+        aspect = (cw / float(ch)) if ch > 0 else 999.0
+        if area > max(120, int(h * w * 0.0035)) and (aspect > 14.0 or aspect < 0.07):
+            continue
+
+        touches_border = (x <= 0 or y <= 0 or (x + cw) >= (w - 1) or (y + ch) >= (h - 1))
+        if touches_border and area > max_border_area:
+            continue
+
+        out[labels == i] = 255
+
+    # Remove uma faixa superior pequena (normalmente cabeçalho não relevante e ruidoso).
+    header_h = max(0, int(h * 0.11))
+    if header_h > 0:
+        out[:header_h, :] = 0
+
+    # Reforça traços após limpeza.
+    k = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+    out = cv2.morphologyEx(out, cv2.MORPH_CLOSE, k, iterations=1)
+    return out
+
+
 def preprocess_roi_for_ocr(roi_bgr):
     """
     Preprocessamento para OCR com foco em nitidez dos dígitos.
-    Retorna imagem binária invertida (preto vira branco e branco vira preto).
+    Retorna imagem binária invertida (texto branco em fundo preto).
     """
     try:
         if roi_bgr is None or roi_bgr.size == 0:
@@ -254,15 +300,16 @@ def preprocess_roi_for_ocr(roi_bgr):
         gray = clahe.apply(gray)
 
         # 3) Reduz ruído preservando bordas
-        gray = cv2.bilateralFilter(gray, 5, 40, 40)
+        gray = cv2.bilateralFilter(gray, 5, 35, 35)
+        gray = cv2.fastNlMeansDenoising(gray, None, 8, 7, 21)
 
         # 4) Binarização local conservadora
         th = cv2.adaptiveThreshold(
             gray, 255,
             cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY,
-            31,
-            7
+            35,
+            8
         )
 
         # Limpa pontos isolados sem destruir os dígitos.
@@ -274,14 +321,22 @@ def preprocess_roi_for_ocr(roi_bgr):
             th = 255 - th
 
         # 5) Remove borda externa dominante
-        th = _crop_inside_border(th, margin=2)
+        h, w = th.shape[:2]
+        dynamic_margin = max(2, int(min(h, w) * 0.04))
+        th = _crop_inside_border(th, margin=dynamic_margin)
 
-        # 6) Inversão final (preto <-> branco), conforme solicitado.
+        # Reforça continuidade dos traços dos caracteres.
+        th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, kernel, iterations=1)
+
+        # Inversão final solicitada: texto branco em fundo preto.
         th = cv2.bitwise_not(th)
 
-        # 7) Suaviza o preto para não ficar "estourado"
-        #    (0 vira ~35, mantendo o branco em 255)
-        th = cv2.max(th, np.full_like(th, 35))
+        # Reduz ruído fino no fundo preto sem apagar os dígitos.
+        th = cv2.medianBlur(th, 3)
+        _, th = cv2.threshold(th, 127, 255, cv2.THRESH_BINARY)
+        # Evita apagar traços finos (ex.: "1", "7") nesta etapa final.
+        th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, kernel, iterations=1)
+        th = _clean_binary_inverted(th)
 
         return th
 
@@ -296,7 +351,8 @@ def extract_text_from_image(image_any):
     if paddleocr is None:
         return None, 0.0
 
-    temp_path = os.path.join(BASE_DIR, "temp_ocr.jpg")
+    # PNG evita perdas por compressão em texto pequeno.
+    temp_path = os.path.join(BASE_DIR, "temp_ocr.png")
     try:
         cv2.imwrite(temp_path, image_any)
         result = paddleocr.ocr(temp_path)
