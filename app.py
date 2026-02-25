@@ -20,14 +20,7 @@ app.secret_key = os.environ.get("FLASK_SECRET_KEY", "troque-essa-chave-em-produc
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Se quiser usar arquivo, deixe RTSP_URL vazio ("")
-RTSP_URL = ""
-
-# 🔧 MODO TESTE (usa datas fixas do vídeo)
-TEST_MODE_VIDEO = True
-
-TEST_TARGET_DATES = ["090226", "061126"]  # ddmmyy (ex: 09/02/26 e 06/11/26)
-TEST_TARGET_LOTE = "2026040"              # lote impresso no vídeo (ontem)
-
+RTSP_URL = "rtsp://admin:admin123@172.16.41.20:554/cam/realmonitor?channel=1&subtype=0"
 
 if RTSP_URL.strip():
     VIDEO_SOURCE = RTSP_URL.strip()
@@ -96,17 +89,10 @@ last_event_text = "—"
 last_ocr_text = "—"
 
 # “datas” (modal)
-# fab/lote: se vazio -> automático
-# validade: se vazio -> DEFAULT_DATA_VAL
+# validade é definida pelo usuário no modal
 dates_state = {
-    "data_fabricacao": "",
     "data_validade": "",
-    "lote": ""
 }
-
-DEFAULT_DATA_FAB = "251124"
-DEFAULT_DATA_VAL = "210925"
-DEFAULT_LOTE = "2024330"
 
 # ========= FILAS / THREADS =========
 log_queue = queue.Queue(maxsize=4000)
@@ -236,54 +222,66 @@ def _crop_inside_border(bin_img, margin=4):
     return bin_img[y1:y2, x1:x2]
 
 
+def _upscale_preserve_details(img_bgr, scale: int):
+    """
+    Upscale com preservação de definição para OCR.
+    Usa Lanczos + unsharp leve para reforçar bordas sem exagerar ruído.
+    """
+    h, w = img_bgr.shape[:2]
+    up = cv2.resize(img_bgr, (w * scale, h * scale), interpolation=cv2.INTER_LANCZOS4)
+
+    # Unsharp mask leve para recuperar microdetalhes após o resize.
+    blur = cv2.GaussianBlur(up, (0, 0), sigmaX=0.7, sigmaY=0.7)
+    sharp = cv2.addWeighted(up, 1.12, blur, -0.12, 0)
+    return sharp
+
+
 def preprocess_roi_for_ocr(roi_bgr):
     """
-    Preprocessamento robusto para seus ROIs (borda + ruído + contraste).
-    Retorna imagem binária (texto preto em fundo branco).
-    Versão ajustada: menos ruído, menos "engrossar" letra.
+    Preprocessamento para OCR com foco em nitidez dos dígitos.
+    Retorna imagem binária invertida (preto vira branco e branco vira preto).
     """
     try:
         if roi_bgr is None or roi_bgr.size == 0:
             return None
 
-        # 1) UPSCALE (OCR agradece muito)
-        h, w = roi_bgr.shape[:2]
-        scale = 3 if min(h, w) < 180 else 2
-        roi = cv2.resize(roi_bgr, (w * scale, h * scale), interpolation=cv2.INTER_CUBIC)
+        # 1) ROI já chega redimensionado no recorte (antes do preprocess).
+        gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
+        gray = cv2.normalize(gray, None, 16, 240, cv2.NORM_MINMAX)
 
-        # 2) GRAY + CONTRASTE
-        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        clahe = cv2.createCLAHE(clipLimit=1.8, tileGridSize=(8, 8))  # ↓ um pouco
+        # 2) Realce local leve após normalização
+        clahe = cv2.createCLAHE(clipLimit=1.6, tileGridSize=(8, 8))
         gray = clahe.apply(gray)
 
-        # 3) REDUÇÃO DE RUÍDO
-        # Median tira pontinhos (sal/pimenta) muito bem, sem borrar tanto
-        gray = cv2.medianBlur(gray, 3)
+        # 3) Reduz ruído preservando bordas
+        gray = cv2.bilateralFilter(gray, 5, 40, 40)
 
-        # 4) ADAPTIVE THRESHOLD (ajuste fino)
+        # 4) Binarização local conservadora
         th = cv2.adaptiveThreshold(
             gray, 255,
             cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY,
-            31,   # ↓ um pouco (mais "local")
-            7     # ↑ C (menos sujeira virando texto)
+            31,
+            7
         )
+
+        # Limpa pontos isolados sem destruir os dígitos.
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+        th = cv2.morphologyEx(th, cv2.MORPH_OPEN, kernel, iterations=1)
 
         # garante texto PRETO
         if (th == 0).mean() > 0.6:
             th = 255 - th
 
-        # 5) REMOVE BORDA PRETA (seu método já é bom)
+        # 5) Remove borda externa dominante
         th = _crop_inside_border(th, margin=2)
 
-        # 6) LIMPEZA: remove pontinhos
-        # OPEN remove ruído pequeno; não engrossa texto
-        k_open = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-        th = cv2.morphologyEx(th, cv2.MORPH_OPEN, k_open, iterations=1)
+        # 6) Inversão final (preto <-> branco), conforme solicitado.
+        th = cv2.bitwise_not(th)
 
-        # 7) (Opcional) CLOSE bem leve só para unir falhas pequenas (sem "colar" ruído)
-        k_close = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-        th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, k_close, iterations=1)
+        # 7) Suaviza o preto para não ficar "estourado"
+        #    (0 vira ~35, mantendo o branco em 255)
+        th = cv2.max(th, np.full_like(th, 35))
 
         return th
 
@@ -357,17 +355,12 @@ def ocr_worker():
     global pass_count, error_count, last_event_text, last_ocr_text
     global date1_consecutive_errors, date2_consecutive_errors, lote_consecutive_errors
     global date1_total_errors, date2_total_errors, lote_total_errors
-    if TEST_MODE_VIDEO:
-        push_log(
-            f"🎯 Alvos OCR (TESTE): fab={TEST_TARGET_DATES[0]} | "
-            f"val={TEST_TARGET_DATES[1]} | lote={TEST_TARGET_LOTE}"
-        )
-    else:
-        auto_fab0, auto_lote0 = _calc_auto_fabricacao_lote()
-        push_log(
-            f"🎯 Alvos OCR (AUTO): fab={auto_fab0} | "
-            f"val={DEFAULT_DATA_VAL} | lote={auto_lote0}"
-        )
+    auto_fab0, auto_lote0 = _calc_auto_fabricacao_lote()
+    initial_val = (dates_state.get("data_validade") or "").strip() or "NÃO DEFINIDA"
+    push_log(
+        f"🎯 Alvos OCR (AUTO): fab={auto_fab0} | "
+        f"val={initial_val} | lote={auto_lote0}"
+    )
 
     while not ocr_stop.is_set():
         try:
@@ -387,21 +380,17 @@ def ocr_worker():
         roi_processed = None
 
         try:
+            auto_fab, auto_lote = _calc_auto_fabricacao_lote()
+            val = (dates_state.get("data_validade") or "").strip()
+            target_dates = [auto_fab, val]
+            target_code = auto_lote
+
+            # Fluxo único: preprocessa ROI e roda OCR uma vez.
             roi_processed = preprocess_roi_for_ocr(roi_bgr)
+            if roi_processed is None or roi_processed.size == 0:
+                roi_processed = roi_bgr
             text, confidence = extract_text_from_image(roi_processed)
             last_ocr_text = text if text else "—"
-
-            if TEST_MODE_VIDEO:
-                target_dates = TEST_TARGET_DATES
-                target_code = TEST_TARGET_LOTE
-            else:
-                auto_fab, auto_lote = _calc_auto_fabricacao_lote()
-
-                fab = (dates_state.get("data_fabricacao") or "").strip() or auto_fab
-                val = (dates_state.get("data_validade") or "").strip() or DEFAULT_DATA_VAL
-                target_dates = [fab, val]
-
-                target_code = ((dates_state.get("lote") or "").strip() or auto_lote)
 
             if text and text.strip() and text != "0000":
                 numeric_sequence = re.sub(r"\D", "", text)
@@ -450,7 +439,7 @@ def ocr_worker():
                     except:
                         pass
 
-                    # ✅ ROI_OK sempre salva PROCESSADO (binarizado)
+                    # ✅ ROI_OK salva a imagem enviada ao OCR (neste teste: ROI redimensionado)
                     try:
                         roi_path = os.path.join(ROI_OK_DIR, f"roi_ok_{timestamp}_conf{confidence:.2f}.jpg")
                         cv2.imwrite(roi_path, roi_processed)
@@ -484,10 +473,6 @@ def ocr_worker():
                 # OCR não achou texto
                 error_count += 1
                 push_log(f"❌ FALHA: Nenhum texto detectado - {image_filename}")
-
-                # garante preprocess pra salvar bin também
-                if roi_processed is None:
-                    roi_processed = preprocess_roi_for_ocr(roi_bgr)
 
                 ts = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%Y%m%d_%H%M%S_%f")
                 _save_fail_pair(ts, "roi_notext", roi_bgr, roi_processed)
@@ -569,6 +554,13 @@ def start_run():
 
     if not require_login():
         return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    val = (dates_state.get("data_validade") or "").strip()
+    if not val:
+        return jsonify({
+            "ok": False,
+            "error": "Defina a data de validade no modal antes de iniciar."
+        }), 400
 
     reset_everything_for_new_run()
     open_video_from_start()
@@ -657,9 +649,9 @@ def get_dates():
 
     auto_fab, auto_lote = _calc_auto_fabricacao_lote()
     return jsonify({
-        "data_fabricacao": dates_state.get("data_fabricacao") or auto_fab,
-        "data_validade": dates_state.get("data_validade") or DEFAULT_DATA_VAL,
-        "lote": dates_state.get("lote") or auto_lote,
+        "data_fabricacao": auto_fab,
+        "data_validade": (dates_state.get("data_validade") or "").strip(),
+        "lote": auto_lote,
     })
 
 
@@ -670,20 +662,16 @@ def set_dates():
 
     data = request.get_json(silent=True) or {}
 
-    # ✅ não apaga campos se o front mandar JSON parcial
-    if "data_fabricacao" in data:
-        dates_state["data_fabricacao"] = (data.get("data_fabricacao") or "").strip()
+    # Apenas a validade é persistida; fabricação/lote são sempre automáticos.
     if "data_validade" in data:
         dates_state["data_validade"] = (data.get("data_validade") or "").strip()
-    if "lote" in data:
-        dates_state["lote"] = (data.get("lote") or "").strip()
 
     auto_fab, auto_lote = _calc_auto_fabricacao_lote()
 
     push_log(
-        f"📅 Datação atualizada | fab={dates_state.get('data_fabricacao') or auto_fab} | "
-        f"val={dates_state.get('data_validade') or DEFAULT_DATA_VAL} | "
-        f"lote={dates_state.get('lote') or auto_lote}"
+        f"📅 Datação atualizada | fab={auto_fab} | "
+        f"val={(dates_state.get('data_validade') or '').strip() or 'NÃO DEFINIDA'} | "
+        f"lote={auto_lote}"
     )
     return jsonify({"ok": True})
 
@@ -691,8 +679,6 @@ def set_dates():
 # ========= VIDEO FEED =========
 def gen_frames():
     global total_video, seen_ids
-
-    line_x = 320
 
     while True:
         if cap is None:
@@ -712,13 +698,22 @@ def gen_frames():
             time.sleep(0.02)
             continue
 
-        frame = cv2.resize(frame, (640, 640))
+        # Mantém o frame original para recorte de ROI em alta definição.
+        frame_original = frame
+        h0, w0 = frame_original.shape[:2]
+
+        # Frame reduzido só para tracking/render.
+        frame_proc = cv2.resize(frame_original, (640, 640))
+        h1, w1 = frame_proc.shape[:2]
+        sx = w0 / float(w1)
+        sy = h0 / float(h1)
+        line_x = w1 // 2
 
         if not RUNNING:
-            annotated = frame
+            annotated = frame_proc
         else:
             try:
-                results = model.track(frame, persist=True, verbose=False)
+                results = model.track(frame_proc, persist=True, verbose=False)
                 r = results[0]
                 annotated = r.plot()
 
@@ -736,18 +731,41 @@ def gen_frames():
                             total_video += 1
                             push_log(f"📦 Contado id={obj_id} | total_video={total_video}")
 
-                            # ROI para OCR
-                            roi = frame[max(0, y1):max(0, y2), max(0, x1):max(0, x2)]
+                            # ROI para OCR extraído do frame original (sem perda de definição).
+                            x1o = max(0, min(w0 - 1, int(round(x1 * sx))))
+                            y1o = max(0, min(h0 - 1, int(round(y1 * sy))))
+                            x2o = max(0, min(w0, int(round(x2 * sx))))
+                            y2o = max(0, min(h0, int(round(y2 * sy))))
+
+                            bw = max(1, x2o - x1o)
+                            bh = max(1, y2o - y1o)
+                            pad_x = int(round(bw * 0.12))
+                            pad_y = int(round(bh * 0.18))
+                            x1o = max(0, x1o - pad_x)
+                            y1o = max(0, y1o - pad_y)
+                            x2o = min(w0, x2o + pad_x)
+                            y2o = min(h0, y2o + pad_y)
+
+                            if x2o <= x1o or y2o <= y1o:
+                                continue
+
+                            roi = frame_original[y1o:y2o, x1o:x2o]
                             if roi.size > 0 and roi.shape[0] > 10 and roi.shape[1] > 10:
                                 try:
+                                    # Resize só aqui, antes do preprocess OCR.
+                                    rh, rw = roi.shape[:2]
+                                    m = min(rh, rw)
+                                    roi_scale = 4 if m < 120 else (3 if m < 220 else 2)
+                                    roi_for_ocr = _upscale_preserve_details(roi, roi_scale)
+
                                     img_name = f"obj_{obj_id}.jpg"
-                                    ocr_queue.put_nowait((roi, frame.copy(), img_name))
+                                    ocr_queue.put_nowait((roi_for_ocr, frame_original.copy(), img_name))
                                 except queue.Full:
                                     push_log("⚠️ Fila OCR cheia — descartando ROI")
 
             except Exception as e:
                 push_log(f"⚠️ Erro YOLO/track: {e}")
-                annotated = frame
+                annotated = frame_proc
 
         # contador de vídeo na imagem
         cv2.putText(
@@ -778,4 +796,3 @@ if __name__ == "__main__":
     push_log("✅ Painel UHT inicializado")
     open_video_from_start()
     app.run(host="0.0.0.0", port=5000, debug=True)
-
